@@ -533,11 +533,21 @@ def import_existing():
 
 @app.route("/v/<sid>")
 def view(sid):
-    img_path = os.path.join(DATA_DIR, f"{sid}.png")
-    if not os.path.exists(img_path):
-        abort(404)
-    image_url = url_for('image', filename=f"{sid}.png")
-    return render_template_string(VIEW_HTML, image_url=image_url, app_title=APP_TITLE)
+  img_path = os.path.join(DATA_DIR, f"{sid}.png")
+  if not os.path.exists(img_path):
+    return """
+    <html>
+      <head>
+      <meta http-equiv="refresh" content="2;url=/" />
+      </head>
+      <body style="background:#0b1020; color:#e6ebff; font-family:sans-serif; text-align:center; padding-top:60px">
+      <h2>Image not found.</h2>
+      <p>Redirecting to <a href="/" style="color:#9bb5ff">main page</a> in 2 seconds...</p>
+      </body>
+    </html>
+    """, 404
+  image_url = url_for('image', filename=f"{sid}.png")
+  return render_template_string(VIEW_HTML, image_url=image_url, app_title=APP_TITLE)
 
 
 @app.route("/api/decrypt/<sid>", methods=["POST"])
