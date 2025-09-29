@@ -606,7 +606,7 @@ MASK_HTML = """
     .wrap { max-width: 900px; margin: 40px auto; padding: 24px; }
     .card { background: #111733; border: 1px solid #1f2852; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
     label { display:block; font-size:13px; opacity:.9; margin: 10px 0 6px; }
-    input[type=file], input[type=password], select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #2b376e; background:#0d1330; color:#e6ebff; }
+    input[type=file], input[type=number], input[type=password], select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #2b376e; background:#0d1330; color:#e6ebff; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap:16px; }
     .actions { margin-top: 16px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
     .btn { background:#3355ff; border:none; color:white; padding:10px 14px; border-radius: 10px; cursor:pointer; font-weight:600; }
@@ -620,13 +620,21 @@ MASK_HTML = """
   </header>
   <div class="wrap">
     <div class="card">
-      <h2>Mask a secret image with a cover PNG</h2>
+      <h2>Mask a secret image with a static cover</h2>
       <form action="/mask/create" method="post" enctype="multipart/form-data">
-        <label>Cover PNG (visible)</label>
-        <input type="file" name="cover" accept="image/png" required>
-
         <label>Secret image (PNG or JPG)</label>
         <input type="file" name="secret" accept="image/png,image/jpeg" required>
+
+        <div class="row">
+          <div>
+            <label>Cover width (px)</label>
+            <input type="number" name="width" min="64" max="4096" value="1024" required>
+          </div>
+          <div>
+            <label>Cover height (px)</label>
+            <input type="number" name="height" min="64" max="4096" value="1024" required>
+          </div>
+        </div>
 
         <div class="row">
           <div>
@@ -657,7 +665,7 @@ MASK_HTML = """
           <a class="btn secondary" href="/">Cancel</a>
         </div>
       </form>
-      <p class="small">Tip: secret images are usually already compressed (JPG/PNG). Compression may not reduce size further.</p>
+      <p class="small">The cover image is auto-generated from static bytes (solid color). Increase width/height or LSBs if your secret image is large.</p>
     </div>
   </div>
 </body>
@@ -743,36 +751,53 @@ def mask_index():
 
 @app.route("/mask/create", methods=["POST"])
 def mask_create():
-    cover = request.files.get("cover")
     secret = request.files.get("secret")
     password = request.form.get("password", "")
     lsb = int(request.form.get("lsb", 1))
     use_alpha = bool(request.form.get("use_alpha"))
     compress = not bool(request.form.get("no_compress"))
 
-    if not cover or not secret or not password:
+    try:
+        width = int(request.form.get("width", 1024))
+        height = int(request.form.get("height", 1024))
+    except Exception:
+        return "Invalid width/height", 400
+    width = max(64, min(width, 4096))
+    height = max(64, min(height, 4096))
+
+    if not secret or not password:
         return "Missing fields", 400
 
-    tmp_id = secrets.token_urlsafe(8)
-    cover_path = os.path.join(DATA_DIR, f"{tmp_id}_cover.png")
-    cover.save(cover_path)
-
+    # Read secret image bytes
     secret_bytes = secret.read()
-    # Optional compression (often no benefit for images)
     comp = maybe_compress(secret_bytes, compress)
     encrypted = encrypt_payload(password, comp)
 
-    # Capacity check using cover image
-    img = Image.open(cover_path)
+    # Create a static cover image (solid color; static bytes)
+    mode = "RGBA" if use_alpha else "RGB"
+    color = (18, 26, 42, 255) if use_alpha else (18, 26, 42)
+    img = Image.new(mode, (width, height), color)
+
+    # Save temporary cover to disk to reuse existing embed function
+    tmp_id = secrets.token_urlsafe(8)
+    cover_path = os.path.join(DATA_DIR, f"{tmp_id}_cover.png")
+    img.save(cover_path, format="PNG")
+
+    # Capacity check
     cap = payload_capacity_bytes(img.size, use_alpha, lsb)
     if len(encrypted) > cap:
-        os.remove(cover_path)
-        return f"Secret image too large for this cover. Capacity ~{cap} bytes; payload {len(encrypted)} bytes.", 400
+        try:
+            os.remove(cover_path)
+        except Exception:
+            pass
+        return f"Secret image too large for the generated cover. Capacity ~{cap} bytes; payload {len(encrypted)} bytes.", 400
 
+    # Embed
     sid = secrets.token_urlsafe(10)
     out_path = os.path.join(DATA_DIR, f"{sid}.png")
     embed_into_png(cover_path, out_path, encrypted, lsb, use_alpha, compress)
 
+    # Cleanup temp
     try:
         os.remove(cover_path)
     except Exception:
