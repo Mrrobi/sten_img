@@ -347,6 +347,7 @@ INDEX_HTML = """
         <div class="actions">
           <button class="btn" type="submit">Create link</button>
           <a class="btn secondary" href="/import">I already have a stego PNG</a>
+          <a class="btn secondary" href="/mask">Mask a secret image</a>
         </div>
       </form>
 
@@ -533,21 +534,11 @@ def import_existing():
 
 @app.route("/v/<sid>")
 def view(sid):
-  img_path = os.path.join(DATA_DIR, f"{sid}.png")
-  if not os.path.exists(img_path):
-    return """
-    <html>
-      <head>
-      <meta http-equiv="refresh" content="2;url=/" />
-      </head>
-      <body style="background:#0b1020; color:#e6ebff; font-family:sans-serif; text-align:center; padding-top:60px">
-      <h2>Image not found.</h2>
-      <p>Redirecting to <a href="/" style="color:#9bb5ff">main page</a> in 2 seconds...</p>
-      </body>
-    </html>
-    """, 404
-  image_url = url_for('image', filename=f"{sid}.png")
-  return render_template_string(VIEW_HTML, image_url=image_url, app_title=APP_TITLE)
+    img_path = os.path.join(DATA_DIR, f"{sid}.png")
+    if not os.path.exists(img_path):
+        abort(404)
+    image_url = url_for('image', filename=f"{sid}.png")
+    return render_template_string(VIEW_HTML, image_url=image_url, app_title=APP_TITLE)
 
 
 @app.route("/api/decrypt/<sid>", methods=["POST"])
@@ -599,6 +590,244 @@ def image(filename):
 def download_bin(filename):
     return send_from_directory(DATA_DIR, filename, as_attachment=True)
 
+# ----------------- Mask Secret Image Templates -----------------
+MASK_HTML = """
+<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Mask Image • {{ app_title }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #0b1020; color: #e6ebff; }
+    header { background:#111733; border-bottom:1px solid #1f2852; padding:12px 20px; }
+    header a { color:#9bb5ff; text-decoration:none; font-weight:600; }
+    .wrap { max-width: 900px; margin: 40px auto; padding: 24px; }
+    .card { background: #111733; border: 1px solid #1f2852; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    label { display:block; font-size:13px; opacity:.9; margin: 10px 0 6px; }
+    input[type=file], input[type=password], select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #2b376e; background:#0d1330; color:#e6ebff; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .actions { margin-top: 16px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .btn { background:#3355ff; border:none; color:white; padding:10px 14px; border-radius: 10px; cursor:pointer; font-weight:600; }
+    .btn.secondary { background:#22306b; }
+    .small { font-size: 12px; opacity:.75; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← Back to Create</a>
+  </header>
+  <div class="wrap">
+    <div class="card">
+      <h2>Mask a secret image with a cover PNG</h2>
+      <form action="/mask/create" method="post" enctype="multipart/form-data">
+        <label>Cover PNG (visible)</label>
+        <input type="file" name="cover" accept="image/png" required>
+
+        <label>Secret image (PNG or JPG)</label>
+        <input type="file" name="secret" accept="image/png,image/jpeg" required>
+
+        <div class="row">
+          <div>
+            <label>Password</label>
+            <input type="password" name="password" required>
+          </div>
+          <div>
+            <label>LSBs per channel</label>
+            <select name="lsb">
+              <option value="1" selected>1 (stealthy)</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label><input type="checkbox" name="use_alpha"> Use alpha channel</label>
+          </div>
+          <div>
+            <label><input type="checkbox" name="no_compress"> Disable compression</label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="submit">Create masked link</button>
+          <a class="btn secondary" href="/">Cancel</a>
+        </div>
+      </form>
+      <p class="small">Tip: secret images are usually already compressed (JPG/PNG). Compression may not reduce size further.</p>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+VIEW_MASK_HTML = """
+<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Reveal Image • {{ app_title }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #0b1020; color: #e6ebff; }
+    header { background:#111733; border-bottom:1px solid #1f2852; padding:12px 20px; }
+    header a { color:#9bb5ff; text-decoration:none; font-weight:600; margin-right:20px; }
+    header a:hover { text-decoration:underline; }
+    .wrap { max-width: 1000px; margin: 40px auto; padding: 24px; }
+    .card { background: #111733; border: 1px solid #1f2852; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    .imgbox { width: 100%; }
+    .imgbox img { width: 100%; height: auto; display: block; border-radius:12px; border:1px solid #243076; }
+    .btn { background:#3355ff; border:none; color:white; padding:10px 14px; border-radius: 10px; cursor:pointer; font-weight:600; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+    input[type=password] { flex:1; min-width: 200px; padding: 10px 12px; border-radius: 10px; border: 1px solid #2b376e; background:#0d1330; color:#e6ebff; }
+    label.checkbox { display:flex; align-items:center; gap:8px; font-size:13px; opacity:.9; margin-top:8px; }
+    .small { font-size: 12px; opacity:.75; }
+    .err { color:#ff8a8a; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← Back to Create</a>
+    <a href="/mask">Mask another</a>
+  </header>
+  <div class="wrap">
+    <div class="card">
+      <div class="imgbox"><img id="cover" src="{{ image_url }}" alt="Masked image"></div>
+      <div class="row">
+        <input id="pwd" type="password" placeholder="Enter password to reveal image">
+        <button class="btn" onclick="reveal()">Reveal Image</button>
+      </div>
+      <label class="checkbox"><input id="delafter" type="checkbox"> Delete this image from server after reveal</label>
+      <div id="error" class="small err"></div>
+    </div>
+  </div>
+<script>
+async function reveal() {
+  const pwd = document.getElementById('pwd').value;
+  const del = document.getElementById('delafter').checked;
+  document.getElementById('error').textContent = '';
+  const res = await fetch(window.location.pathname.replace('/m/','/api/decrypt_image/'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd, delete_after: del })
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    document.getElementById('error').textContent = t || 'Failed to decrypt.';
+    return;
+  }
+  const data = await res.json();
+  if (data.data_url) {
+    document.getElementById('cover').src = data.data_url;
+  }
+  if (data.deleted) {
+    const note = document.createElement('div');
+    note.className = 'small';
+    note.textContent = 'This image has been deleted from the server.';
+    document.querySelector('.card').appendChild(note);
+  }
+}
+</script>
+</body>
+</html>
+"""
+
+# ----------------- Mask routes -----------------
+@app.route("/mask", methods=["GET"])
+def mask_index():
+    return render_template_string(MASK_HTML, app_title=APP_TITLE)
+
+@app.route("/mask/create", methods=["POST"])
+def mask_create():
+    cover = request.files.get("cover")
+    secret = request.files.get("secret")
+    password = request.form.get("password", "")
+    lsb = int(request.form.get("lsb", 1))
+    use_alpha = bool(request.form.get("use_alpha"))
+    compress = not bool(request.form.get("no_compress"))
+
+    if not cover or not secret or not password:
+        return "Missing fields", 400
+
+    tmp_id = secrets.token_urlsafe(8)
+    cover_path = os.path.join(DATA_DIR, f"{tmp_id}_cover.png")
+    cover.save(cover_path)
+
+    secret_bytes = secret.read()
+    # Optional compression (often no benefit for images)
+    comp = maybe_compress(secret_bytes, compress)
+    encrypted = encrypt_payload(password, comp)
+
+    # Capacity check using cover image
+    img = Image.open(cover_path)
+    cap = payload_capacity_bytes(img.size, use_alpha, lsb)
+    if len(encrypted) > cap:
+        os.remove(cover_path)
+        return f"Secret image too large for this cover. Capacity ~{cap} bytes; payload {len(encrypted)} bytes.", 400
+
+    sid = secrets.token_urlsafe(10)
+    out_path = os.path.join(DATA_DIR, f"{sid}.png")
+    embed_into_png(cover_path, out_path, encrypted, lsb, use_alpha, compress)
+
+    try:
+        os.remove(cover_path)
+    except Exception:
+        pass
+
+    return redirect(url_for('view_mask', sid=sid))
+
+@app.route("/m/<sid>")
+def view_mask(sid):
+    img_path = os.path.join(DATA_DIR, f"{sid}.png")
+    if not os.path.exists(img_path):
+        abort(404)
+    image_url = url_for('image', filename=f"{sid}.png")
+    return render_template_string(VIEW_MASK_HTML, image_url=image_url, app_title=APP_TITLE)
+
+@app.route("/api/decrypt_image/<sid>", methods=["POST"]) 
+def api_decrypt_image(sid):
+    img_path = os.path.join(DATA_DIR, f"{sid}.png")
+    if not os.path.exists(img_path):
+        return "Not found", 404
+    js = request.get_json(silent=True) or {}
+    password = js.get("password", "")
+    delete_after = bool(js.get("delete_after", False))
+    if not password:
+        return "Password required", 400
+    try:
+        encrypted, lsb, use_alpha, compressed = extract_from_png(img_path)
+        decrypted = decrypt_payload(password, encrypted)
+        if compressed:
+            try:
+                decrypted = maybe_decompress(decrypted, True)
+            except Exception:
+                pass
+        # Verify it's an image; re-encode to PNG and return data URL
+        try:
+            im = Image.open(BytesIO(decrypted))
+            buf = BytesIO()
+            im.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+            data_url = f"data:image/png;base64,{b64}"
+        except Exception:
+            return "Payload is not a valid image.", 400
+        # Optionally delete the stego file
+        deleted = False
+        if delete_after:
+            try:
+                os.remove(img_path)
+                deleted = True
+            except Exception:
+                deleted = False
+        return jsonify({"data_url": data_url, "deleted": deleted})
+    except Exception as e:
+        return str(e), 400
+    return send_from_directory(DATA_DIR, filename, as_attachment=True)
+
 
 @app.route("/admin/cleanup", methods=["POST"]) 
 def admin_cleanup():
@@ -613,18 +842,7 @@ def admin_cleanup():
                 removed += 1
             except Exception:
                 pass
-    return f"""
-    <html>
-      <head>
-        <meta http-equiv="refresh" content="5;url=/" />
-      </head>
-      <body style="background:#0b1020; color:#e6ebff; font-family:sans-serif; text-align:center; padding-top:60px">
-        <h2>Deleted {removed} files from data/</h2>
-        <p>Returning to <a href="/" style="color:#9bb5ff">home page</a> in 5 seconds...</p>
-      </body>
-    </html>
-    """, 200
-
+    return f"Deleted {removed} files from data/ — <a href='/' style='color:#9bb5ff'>Back</a>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
