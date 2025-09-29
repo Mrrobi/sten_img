@@ -1,0 +1,4 @@
+flask>=3.0
+pillow>=10.3
+cryptography>=42
+gunicorn>=22
